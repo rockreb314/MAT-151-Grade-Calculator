@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Grade Calculator</title>
+<style>
+  :root {
+    --ink: #14213d;
+    --muted: #5b6577;
+    --paper: #ffffff;
+    --panel: #f3f5f9;
+    --line: #d5dbe6;
+    --accent: #1f5fae;
+    --warn: #b42318;
+    --ok: #1d6b45;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 16px; background: var(--paper); color: var(--ink);
+    font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+  }
+  .wrap { max-width: 980px; margin: 0 auto; }
+  h1 { font-size: 1.5rem; margin: 0 0 4px; }
+  .how { color: var(--muted); margin: 0 0 16px; max-width: 70ch; }
+  .how b { color: var(--ink); }
+
+  .result {
+    display: flex; flex-wrap: wrap; gap: 20px; align-items: center; justify-content: space-between;
+    background: var(--ink); color: #fff; border-radius: 10px; padding: 18px 22px; margin-bottom: 18px;
+  }
+  .big { font-size: 2.8rem; font-weight: 700; line-height: 1; letter-spacing: -0.02em; }
+  .letter { font-size: 1.1rem; opacity: .85; margin-top: 4px; }
+  .breakdown { display: grid; gap: 2px; font-size: .95rem; min-width: 240px; }
+  .breakdown div { display: flex; justify-content: space-between; gap: 24px; }
+  .breakdown span:first-child { opacity: .8; }
+  .note { flex-basis: 100%; font-size: .85rem; opacity: .8; margin: 0; }
+
+  .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; align-items: start; }
+  .col { display: grid; gap: 16px; align-content: start; min-width: 0; }
+  @media (max-width: 640px) { .grid { grid-template-columns: 1fr; } }
+  fieldset { border: 1px solid var(--line); border-radius: 10px; margin: 0; padding: 0 14px 12px; background: var(--panel); min-width: 0; }
+  legend { padding: 0 6px; font-weight: 700; }
+  .rule { color: var(--muted); font-size: .85rem; margin: 6px 0 10px; }
+  .row { display: grid; grid-template-columns: 1fr 96px; gap: 8px; align-items: center; padding: 3px 0; }
+  .row label { font-size: .95rem; }
+  .row.dropped label { color: var(--muted); text-decoration: line-through; }
+  .row.dropped .tag { display: inline; }
+  .tag { display: none; font-size: .75rem; color: var(--muted); margin-left: 6px; text-decoration: none; }
+  .field { position: relative; }
+  .field input {
+    width: 100%; padding: 6px 24px 6px 8px; font: inherit; text-align: right;
+    border: 1px solid var(--line); border-radius: 6px; background: #fff; color: var(--ink);
+  }
+  .field input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .field input.bad { border-color: var(--warn); }
+  .row.dropped .field input { background: #e9ecf2; color: var(--muted); }
+  .field::after { content: "%"; position: absolute; right: 8px; top: 50%; transform: translateY(-50%); color: var(--muted); pointer-events: none; }
+  .msg { color: var(--warn); font-size: .85rem; min-height: 1.2em; margin-top: 12px; }
+  button {
+    font: inherit; padding: 8px 16px; border-radius: 6px; border: 1px solid var(--accent);
+    background: #fff; color: var(--accent); cursor: pointer; margin-top: 14px;
+  }
+  button:hover { background: var(--accent); color: #fff; }
+  button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Grade Calculator</h1>
+  <p class="how">
+    <b>Step 1:</b> Enter every grade you currently have in Canvas as a percentage.
+    <b>Step 2:</b> For assignments you haven't finished yet, leave them blank to ignore them, or enter a score to see a "what if" result.
+    Dropped scores are crossed out automatically.
+  </p>
+
+  <div class="result" aria-live="polite">
+    <div>
+      <div class="big" id="overall">—</div>
+      <div class="letter" id="letter">Enter a grade to begin</div>
+    </div>
+    <div class="breakdown" id="breakdown"></div>
+    <p class="note" id="note"></p>
+  </div>
+
+  <div class="grid" id="grid"></div>
+  <div class="msg" id="msg" role="alert"></div>
+  <button type="button" id="reset">Clear all grades</button>
+</div>
+
+<script>
+/* ============================================================
+   EDIT THIS SECTION FOR FUTURE COURSES
+   - weight: percent of the final grade (weights should total 100)
+   - drop:   number of lowest scores dropped in that category
+   - names:  the label shown for each assignment
+   - column: which column it appears in (1 = left, 2 = right);
+             categories in the same column stack top to bottom
+   ============================================================ */
+const COUNT = (n, fn) => Array.from({ length: n }, (_, i) => fn(i + 1));
+
+const CATEGORIES = [
+  { name: "Homework", weight: 10, drop: 2, column: 1, names: COUNT(13, i => `Module ${i} HW`) },
+  { name: "Quizzes",  weight: 20, drop: 1, column: 2, names: COUNT(5,  i => `Quiz ${i}`) },
+  { name: "Exams",    weight: 70, drop: 1, column: 2, names: ["Exam 1", "Exam 2", "Exam 3", "Final Exam"] },
+];
+
+// Letter grade cutoffs (lowest percent for each letter), highest first.
+const LETTERS = [
+  ["A", 90], ["B", 80], ["C", 70], ["D", 60], ["F", 0],
+];
+
+const MAX_SCORE = 150;   // largest score accepted (allows extra credit)
+/* ============================================================
+   END OF EDITABLE SECTION
+   ============================================================ */
+
+const grid = document.getElementById("grid");
+const inputs = [];   // inputs[c][i]
+const rows = [];     // rows[c][i]
+
+const columns = {};
+CATEGORIES.forEach(cat => {
+  const n = cat.column || 1;
+  if (!columns[n]) {
+    columns[n] = document.createElement("div");
+    columns[n].className = "col";
+  }
+});
+Object.keys(columns).sort().forEach(n => grid.appendChild(columns[n]));
+
+CATEGORIES.forEach((cat, c) => {
+  const fs = document.createElement("fieldset");
+  const dropText = cat.drop > 0
+    ? `Worth ${cat.weight}%. Lowest ${cat.drop} dropped once you have entered all scores.`
+    : `Worth ${cat.weight}%. No scores dropped.`;
+  fs.innerHTML = `<legend>${cat.name}</legend><p class="rule">${dropText}</p>`;
+  inputs[c] = []; rows[c] = [];
+  cat.names.forEach((name, i) => {
+    const id = `in-${c}-${i}`;
+    const row = document.createElement("div");
+    row.className = "row";
+    row.innerHTML = `<label for="${id}">${name}<span class="tag">dropped</span></label>
+      <span class="field"><input id="${id}" type="text" inputmode="decimal" autocomplete="off" placeholder="—"></span>`;
+    const input = row.querySelector("input");
+    input.addEventListener("input", calculate);
+    fs.appendChild(row);
+    inputs[c][i] = input; rows[c][i] = row;
+  });
+  columns[cat.column || 1].appendChild(fs);
+});
+
+function parse(el) {
+  const raw = el.value.trim().replace("%", "");
+  if (raw === "") return { state: "empty" };
+  const v = Number(raw);
+  if (!isFinite(v) || v < 0 || v > MAX_SCORE) return { state: "bad" };
+  return { state: "ok", v };
+}
+
+function letterFor(p) {
+  for (const [l, min] of LETTERS) if (p >= min) return l;
+  return LETTERS[LETTERS.length - 1][0];
+}
+
+function calculate() {
+  let anyBad = false;
+  const results = CATEGORIES.map((cat, c) => {
+    const entered = [];
+    inputs[c].forEach((el, i) => {
+      const p = parse(el);
+      el.classList.toggle("bad", p.state === "bad");
+      if (p.state === "bad") anyBad = true;
+      if (p.state === "ok") entered.push({ i, v: p.v });
+    });
+    // Drops only apply once more scores are entered than the number that counts.
+    const keepCount = cat.names.length - cat.drop;
+    const dropN = Math.max(0, entered.length - keepCount);
+    const sorted = [...entered].sort((a, b) => a.v - b.v || a.i - b.i);
+    const dropped = new Set(sorted.slice(0, dropN).map(x => x.i));
+    rows[c].forEach((row, i) => row.classList.toggle("dropped", dropped.has(i)));
+    const kept = entered.filter(x => !dropped.has(x.i));
+    const avg = kept.length ? kept.reduce((s, x) => s + x.v, 0) / kept.length : null;
+    return { cat, avg, count: entered.length };
+  });
+
+  document.getElementById("msg").textContent = anyBad
+    ? `Some entries were ignored. Enter numbers between 0 and ${MAX_SCORE}.` : "";
+
+  const active = results.filter(r => r.avg !== null);
+  const totalW = active.reduce((s, r) => s + r.cat.weight, 0);
+  const overallEl = document.getElementById("overall");
+  const letterEl = document.getElementById("letter");
+  const noteEl = document.getElementById("note");
+
+  document.getElementById("breakdown").innerHTML = results.map(r =>
+    `<div><span>${r.cat.name} (${r.cat.weight}%)</span><span>${r.avg === null ? "—" : r.avg.toFixed(2) + "%"}</span></div>`
+  ).join("");
+
+  if (!totalW) {
+    overallEl.textContent = "—";
+    letterEl.textContent = "Enter a grade to begin";
+    noteEl.textContent = "";
+    return;
+  }
+  const overall = active.reduce((s, r) => s + r.avg * r.cat.weight, 0) / totalW;
+  overallEl.textContent = overall.toFixed(2) + "%";
+  letterEl.textContent = "Letter grade: " + letterFor(overall);
+  noteEl.textContent = active.length < results.length
+    ? "Categories with no scores yet are left out, and the remaining weights are scaled to 100%."
+    : "";
+}
+
+document.getElementById("reset").addEventListener("click", () => {
+  inputs.flat().forEach(el => { el.value = ""; });
+  calculate();
+});
+calculate();
+</script>
+</body>
+</html>
